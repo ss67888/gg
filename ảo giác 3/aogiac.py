@@ -6,22 +6,7 @@ import difflib
 import re
 import argparse
 from pathlib import Path
-from typing import Dict, Optional, TYPE_CHECKING
-from threading import Thread
-
-# runtime optional import (không bắt buộc lúc import module)
-try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler
-    WATCHDOG_AVAILABLE = True
-except Exception:
-    WATCHDOG_AVAILABLE = False
-    class FileSystemEventHandler:
-        pass
-
-# chỉ cho static type checkers (Pylance / mypy)
-if TYPE_CHECKING:
-    from watchdog.observers import Observer  # type: ignore
+from typing import Dict, Optional
 
 # Sử dụng thư viện wikidata.client để truy vấn facts
 from wikidata.client import Client
@@ -29,7 +14,7 @@ from wikidata.client import Client
 # Không còn DEFAULT_FAQ; chương trình chỉ dùng faq.json nếu tồn tại.
 FAQ_PATH = Path("faq.json")
 
-# Cache để tránh đọc file liên tục; watcher sẽ cập nhật ngay khi file thay đổi.
+# Cache để tránh đọc file liên tục; reload thủ công hoặc khi chương trình chạy sẽ cập nhật khi cần.
 _faq_cache = {
     "mtime": 0.0,
     "data": {}
@@ -69,39 +54,14 @@ def _load_faq_if_updated(path: Path = FAQ_PATH) -> Dict[str, str]:
         pass
     return _faq_cache["data"]
 
-# Watcher: cập nhật cache ngay khi file thay đổi
-class FAQFileHandler(FileSystemEventHandler):
-    def __init__(self, path: Path):
-        super().__init__()
-        self._path = path
-
-    def on_modified(self, event):
-        try:
-            if Path(event.src_path).resolve() == self._path.resolve():
-                _faq_cache["data"] = _load_faq_from_disk(self._path)
-                _faq_cache["mtime"] = self._path.stat().st_mtime if self._path.exists() else 0.0
-                print("[faq watcher] faq.json được cập nhật.")
-        except Exception:
-            pass
-
-def start_faq_watcher(path: Path = FAQ_PATH) -> Optional["Observer"]:
+# Watcher đã bị loại bỏ để đơn giản hoá môi trường runtime.
+# Nếu --watch được truyền, chương trình sẽ thông báo là không hỗ trợ và tiếp tục chạy.
+def start_faq_watcher(path: Path = FAQ_PATH) -> Optional[object]:
     """
-    Khởi chạy watchdog observer trong background.
-    Trả về Observer (hoặc None nếu watchdog không có).
+    Không khởi chạy watcher (watchdog đã bị loại bỏ). Trả về None.
     """
-    if not WATCHDOG_AVAILABLE:
-        print("watchdog không được tìm thấy.")
-        return None
-    observer = Observer()
-    # ...
-    return observer
-    # runtime: Observer được import trong try/except ở trên (nếu tồn tại)
-    observer = Observer()
-    handler = FAQFileHandler(path)
-    observer.schedule(handler, path=path.parent.as_posix() or ".", recursive=False)
-    observer.start()
-    print("[faq watcher] Đang lắng nghe thay đổi ở", str(path))
-    return observer
+    print("--watch hiện không được hỗ trợ trong bản này; bỏ qua.")
+    return None
 
 # --- Các hàm tra cứu (Wikidata / Wikipedia) ---
 def tra_cuu_wikidata(cau_hoi: str) -> str:
@@ -197,6 +157,7 @@ def do_ao_giac(cau_tra_loi_llm: str, cau_tra_loi_tham_chieu: str) -> float:
 
     return difflib.SequenceMatcher(None, ans.lower(), ref.lower()).ratio()
 
+
 def _print_result(cau_hoi: str, llm_ans: str, tham_chieu: str, diem: float) -> None:
     print(f"Câu hỏi: {cau_hoi}")
     print(f"LLM trả lời: {llm_ans}")
@@ -207,12 +168,13 @@ def _print_result(cau_hoi: str, llm_ans: str, tham_chieu: str, diem: float) -> N
     else:
         print("Câu trả lời đúng với tham chiếu.\n")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Kiểm tra ảo giác: so sánh trả lời LLM với nguồn tham chiếu.")
     parser.add_argument("-q", "--question", help="Câu hỏi cần tra cứu (bao quanh bằng dấu ngoặc nếu có khoảng trắng).")
     parser.add_argument("-a", "--answer", help="Câu trả lời từ LLM để so sánh.")
     parser.add_argument("-i", "--interactive", action="store_true", help="Chạy chế độ tương tác (nhập câu hỏi và trả lời).")
-    parser.add_argument("--watch", action="store_true", help="Chạy watcher để tự động reload faq.json khi thay đổi.")
+    parser.add_argument("--watch", action="store_true", help="(bị bỏ) --watch không còn được hỗ trợ.")
     args = parser.parse_args()
 
     observer = None
@@ -242,11 +204,16 @@ def main():
         print("Sử dụng:")
         print("  python aogiac.py -q \"Câu hỏi\" -a \"LLM trả lời\"")
         print("  python aogiac.py --interactive")
-        print("  Thêm --watch để lắng nghe thay đổi faq.json và reload tự động.")
+        print("  --watch đã bị loại bỏ; chương trình không lắng nghe thay đổi faq.json.")
     finally:
         if observer is not None:
-            observer.stop()
-            observer.join()
+            # observer là None vì watcher đã bị loại bỏ, nhưng giữ logic an toàn
+            try:
+                observer.stop()
+                observer.join()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     main()
