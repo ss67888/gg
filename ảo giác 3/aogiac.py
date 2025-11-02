@@ -67,7 +67,9 @@ def start_faq_watcher(path: Path = FAQ_PATH) -> Optional[object]:
 def tra_cuu_wikidata(cau_hoi: str) -> str:
     client = Client()
     try:
-        if "thủ đô" in cau_hoi.lower():
+        q_lower = cau_hoi.lower()
+        # Trường hợp hỏi về thủ đô
+        if "thủ đô" in q_lower:
             match = re.search(r"Thủ đô của (.+?) là gì", cau_hoi, re.IGNORECASE)
             if match:
                 country = match.group(1).strip()
@@ -79,12 +81,42 @@ def tra_cuu_wikidata(cau_hoi: str) -> str:
                             return f"Thủ đô của {country} là {capital.label.text}."
                     except Exception:
                         continue
-        if "tổng thống" in cau_hoi.lower() and "hoa kỳ" in cau_hoi.lower():
-            usa = client.get('Q30', load=True)
-            president = usa['P6']
-            if hasattr(president, 'label'):
-                return f"Tổng thống Hoa Kỳ hiện tại là {president.label.text}."
-        if "nước sôi" in cau_hoi.lower():
+
+        # Trường hợp hỏi về tổng thống (của một quốc gia cụ thể)
+        if "tổng thống" in q_lower:
+            # Cố gắng tách tên quốc gia từ câu hỏi
+            match = re.search(r"tổng thống(?: của)?\s+(.+?)\??$", cau_hoi, re.IGNORECASE)
+            if not match:
+                match = re.search(r"ai là tổng thống(?: của)?\s+(.+?)\??$", cau_hoi, re.IGNORECASE)
+            country = None
+            if match:
+                country = match.group(1).strip()
+            # Một số cách gọi phổ biến cho Hoa Kỳ
+            if country is None and ("hoa kỳ" in q_lower or "mỹ" in q_lower or re.search(r"\bmy\b", q_lower)):
+                try:
+                    usa = client.get('Q30', load=True)
+                    president = usa.get('P6') if hasattr(usa, 'get') else usa['P6']
+                    if hasattr(president, 'label'):
+                        return f"Tổng thống Hoa Kỳ hiện tại là {president.label.text}."
+                except Exception:
+                    pass
+
+            if country:
+                # Tìm entity theo tên country rồi lấy P6 nếu có
+                try:
+                    entities = client.search(country, limit=3)
+                    for entity in entities:
+                        try:
+                            president = entity['P6']
+                            if hasattr(president, 'label'):
+                                return f"Tổng thống của {country} hiện tại là {president.label.text}."
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+        # Một số câu hỏi đơn giản / cứng
+        if "nước sôi" in q_lower:
             return "100°C"
     except Exception:
         pass
@@ -100,7 +132,8 @@ def tra_cuu_wikipedia(cau_hoi: str, lang: str = "vi") -> str:
             search_results,
             key=lambda title: difflib.SequenceMatcher(None, cau_hoi.lower(), title.lower()).ratio()
         )
-        if difflib.SequenceMatcher(None, cau_hoi.lower(), best_title.lower()).ratio() < 0.5:
+        # Nếu kết quả tốt nhất quá chung chung (ví dụ: "Tổng thống"), bỏ qua
+        if difflib.SequenceMatcher(None, cau_hoi.lower(), best_title.lower()).ratio() < 0.5 or best_title.lower() == "tổng thống":
             return ""
         try:
             summary = wikipedia.summary(best_title, sentences=2, auto_suggest=False)
@@ -168,7 +201,6 @@ def _print_result(cau_hoi: str, llm_ans: str, tham_chieu: str, diem: float) -> N
     else:
         print("Câu trả lời đúng với tham chiếu.\n")
 
-
 def main():
     parser = argparse.ArgumentParser(description="Kiểm tra ảo giác: so sánh trả lời LLM với nguồn tham chiếu.")
     parser.add_argument("-q", "--question", help="Câu hỏi cần tra cứu (bao quanh bằng dấu ngoặc nếu có khoảng trắng).")
@@ -188,6 +220,10 @@ def main():
                 q = input("Câu hỏi: ").strip()
                 if q.lower() in ("exit", "quit"):
                     break
+                if q.lower() == "reload":
+                    _load_faq_if_updated(FAQ_PATH)
+                    print("Đã reload faq.json.")
+                    continue
                 ans = input("LLM trả lời: ").strip()
                 tham_chieu = tra_cuu_kien_thuc(q)
                 diem = do_ao_giac(ans, tham_chieu)
@@ -207,7 +243,6 @@ def main():
         print("  --watch đã bị loại bỏ; chương trình không lắng nghe thay đổi faq.json.")
     finally:
         if observer is not None:
-            # observer là None vì watcher đã bị loại bỏ, nhưng giữ logic an toàn
             try:
                 observer.stop()
                 observer.join()
